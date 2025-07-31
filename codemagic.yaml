@@ -1,0 +1,68 @@
+workflows:
+  ios-workflow:
+    name: iOS Workflow
+    max_build_duration: 120
+    environment:
+      vars:
+        BUNDLE_ID: "com.snapbite.ios"
+        XCODE_WORKSPACE: "SnapBite.xcworkspace"
+        XCODE_SCHEME: "SnapBite"
+        # OPENAI_API_KEY: # Will add later after successful build
+      node: v16.20.2
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+      - name: Get CocoaPods dependencies
+        script: |
+          cd ios && pod install
+      - name: Build for iOS Simulator (No Signing)
+        script: |
+          cd ios
+          xcodebuild -workspace "$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ../build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            PROVISIONING_PROFILE="" \
+            build
+      - name: Create AltStore IPA
+        script: |
+          # Create Payload directory
+          mkdir -p Payload
+          
+          # Find and copy the app bundle
+          find ./build -name "SnapBite.app" -path "*/Release-iphonesimulator/*" -exec cp -r {} Payload/ \;
+          
+          # Create unsigned IPA for AltStore
+          zip -r SnapBite-AltStore.ipa Payload/
+          
+          # Create artifacts directory and move IPA
+          mkdir -p build/ios/ipa/
+          mv SnapBite-AltStore.ipa build/ios/ipa/
+          
+          # Verify IPA was created
+          ls -la build/ios/ipa/
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      email:
+        recipients:
+          - user@example.com
+        notify:
+          success: true
+          failure: false
+      # app_store_connect: # Will configure after successful build
+        # api_key: # Contents of Authkey_XXXXXXXXXX.p8
+        # key_id: # Identifier of the key
+        # issuer_id: # Issuer ID
+        # submit_to_testflight: true
+        # submit_to_app_store: false

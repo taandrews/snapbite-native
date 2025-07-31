@@ -1,0 +1,158 @@
+name: iOS Production Build with Code Signing
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm install --legacy-peer-deps
+      
+    - name: Setup Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.0'
+        bundler-cache: true
+        
+    - name: Install CocoaPods
+      run: |
+        cd ios
+        pod install --repo-update
+        
+    - name: Create .xcode.env file
+      run: |
+        echo 'export NODE_BINARY=$(command -v node)' > ios/.xcode.env
+
+    - name: Import Code Signing Certificates
+      env:
+        CERTIFICATES_P12: ${{ secrets.CERTIFICATES_P12 }}
+        CERTIFICATES_PASSWORD: ${{ secrets.CERTIFICATES_PASSWORD }}
+        PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        # Create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        security set-keychain-settings -t 3600 -u build.keychain
+        
+        # Import certificate
+        echo $CERTIFICATES_P12 | base64 --decode > certificate.p12
+        security import certificate.p12 -k build.keychain -P "$CERTIFICATES_PASSWORD" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+        
+        # Install provisioning profile
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+        echo $PROVISIONING_PROFILE | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+        
+    - name: Build iOS app
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        PROVISIONING_PROFILE_UUID: ${{ secrets.PROVISIONING_PROFILE_UUID }}
+      run: |
+        cd ios
+        xcodebuild -workspace SnapBite.xcworkspace \
+          -scheme SnapBite \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath $PWD/build/SnapBite.xcarchive \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+          PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
+          CODE_SIGN_STYLE=Manual \
+          archive
+          
+    - name: Export signed IPA for App Store
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        PROVISIONING_PROFILE_UUID: ${{ secrets.PROVISIONING_PROFILE_UUID }}
+      run: |
+        cd ios
+        cat > ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>$DEVELOPMENT_TEAM</string>
+            <key>uploadBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+        </dict>
+        </plist>
+        EOF
+        
+        xcodebuild -exportArchive \
+          -archivePath $PWD/build/SnapBite.xcarchive \
+          -exportOptionsPlist ExportOptions.plist \
+          -exportPath $PWD/build/ \
+          -allowProvisioningUpdates
+          
+    - name: Upload to TestFlight
+      env:
+        APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      run: |
+        # Install App Store Connect API key
+        mkdir -p ~/.appstoreconnect/private_keys/
+        echo "$APP_STORE_CONNECT_API_KEY" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8
+        
+        # Upload to TestFlight
+        xcrun altool --upload-app \
+          --type ios \
+          --file ios/build/SnapBite.ipa \
+          --apiKey $APP_STORE_CONNECT_API_KEY_ID \
+          --apiIssuer $APP_STORE_CONNECT_API_ISSUER_ID
+        
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SnapBite-signed.ipa
+        path: ios/build/SnapBite.ipa
+        retention-days: 30
+        
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: SnapBite iOS Production Build ${{ github.run_number }}
+        body: |
+          Production-signed iOS build ready for App Store distribution
+          
+          ## Features
+          ✅ AI-powered restaurant discovery with OpenAI GPT-4o
+          ✅ Screenshot analysis for restaurant detection  
+          ✅ Real-time geolocation services
+          ✅ Proximity notifications
+          ✅ Restaurant deletion and date tracking
+          ✅ Premium features and monetization
+          ✅ Apple Developer account code signing
+          
+          ## Distribution
+          - App Store Connect upload: Automatic via TestFlight
+          - Manual installation: Download signed .ipa
+        files: |
+          ios/build/SnapBite.ipa
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

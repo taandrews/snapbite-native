@@ -1,0 +1,117 @@
+name: iOS Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm install
+      
+    - name: Setup Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.0'
+        bundler-cache: true
+        
+    - name: Install CocoaPods
+      run: |
+        cd ios
+        pod install --repo-update
+        
+    - name: Create .xcode.env file
+      run: |
+        echo 'export NODE_BINARY=$(command -v node)' > ios/.xcode.env
+        
+    - name: Build iOS app
+      run: |
+        cd ios
+        xcodebuild -workspace SnapBite.xcworkspace \
+          -scheme SnapBite \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath $PWD/build/SnapBite.xcarchive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          PROVISIONING_PROFILE="" \
+          DEVELOPMENT_TEAM="" \
+          archive
+          
+    - name: Export unsigned IPA for AltStore
+      run: |
+        cd ios
+        mkdir -p ExportOptions
+        cat > ExportOptions/ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <false/>
+        </dict>
+        </plist>
+        EOF
+        
+        xcodebuild -exportArchive \
+          -archivePath $PWD/build/SnapBite.xcarchive \
+          -exportOptionsPlist ExportOptions/ExportOptions.plist \
+          -exportPath $PWD/build/
+          
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SnapBite-unsigned.ipa
+        path: ios/build/SnapBite.ipa
+        retention-days: 30
+        
+    - name: Create release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: SnapBite iOS Build ${{ github.run_number }}
+        body: |
+          Unsigned iOS build for AltStore installation
+          
+          ## Installation Instructions
+          1. Install AltStore on your iPhone
+          2. Download the .ipa file
+          3. Open in AltStore to install on your device
+          
+          ## Features
+          - AI-powered restaurant discovery with OpenAI GPT-4o
+          - Screenshot analysis for restaurant detection
+          - Real-time geolocation services
+          - Proximity notifications
+          - Premium features and monetization
+        files: |
+          ios/build/SnapBite.ipa
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,7 +4,7 @@ require_relative '../node_modules/@react-native-community/cli-platform-ios/nativ
 platform :ios, '11.0'
 install! 'cocoapods', :deterministic_uuids => false
 
-project 'SnapBite.xcodeproj'
+workspace 'SnapBite.xcworkspace'
 
 target 'SnapBite' do
   config = use_native_modules!
@@ -28,7 +28,6 @@ target 'SnapBite' do
     )
     __apply_Xcode_12_5_M1_post_install_workaround(installer)
     
-    # Fix for Xcode 16 compatibility
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
         config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '11.0'

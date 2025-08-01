@@ -156,4 +156,4 @@ For technical support or business inquiries:
 
 ---
 
-**Built with commercial standards, security-first architecture, and global scalability. Ready for millions of users worldwide.**# snapbite-native
+**Built with commercial standards, security-first architecture, and global scalability. Ready for millions of users worldwide.**
